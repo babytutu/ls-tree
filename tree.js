@@ -4,7 +4,109 @@ const path = require('path')
 const readline = require('readline')
 const { execSync } = require('child_process')
 
-// 获取所有已挂载的硬盘
+// ============ 自动模式（命令行调用） ============
+function runAutoMode(targetPath) {
+  if (!targetPath) {
+    console.error('❌ 请使用 --target 指定要扫描的目录')
+    console.log('示例: node tree.js --auto --target /path/to/folder')
+    process.exit(1)
+  }
+
+  if (!fs.existsSync(targetPath)) {
+    console.error(`❌ 目录不存在: ${targetPath}`)
+    process.exit(1)
+  }
+
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const folderName = path.basename(targetPath)
+  const cleanFolder = sanitizeFilename(folderName)
+  const fileName = `清单_${cleanFolder}_${timestamp}.txt`
+  const outputPath = path.join(targetPath, fileName)
+
+  console.log(`🚀 自动模式: 扫描 ${targetPath}`)
+  console.log(`📂 清单将保存到: ${outputPath}\n`)
+
+  const lines = []
+  let totalFolders = 0,
+    totalFiles = 0
+  let skippedFolders = 0
+  let scannedFolders = 0
+
+  function showProgress() {
+    readline.cursorTo(process.stdout, 0)
+    process.stdout.write(
+      `📂 已扫描 ${scannedFolders} 个文件夹，${totalFiles} 个文件`,
+    )
+  }
+
+  function walk(dir, pre = '') {
+    if (!canReadDir(dir)) {
+      skippedFolders++
+      return
+    }
+
+    let items
+    try {
+      items = fs.readdirSync(dir)
+    } catch (e) {
+      skippedFolders++
+      return
+    }
+
+    const dirs = []
+    let files = 0
+    for (const i of items) {
+      const p = path.join(dir, i)
+      try {
+        const s = fs.statSync(p)
+        if (s.isDirectory()) {
+          if (canReadDir(p)) {
+            dirs.push(i)
+          } else {
+            skippedFolders++
+          }
+        } else {
+          files++
+        }
+      } catch (e) {}
+    }
+
+    const name = path.basename(dir)
+    const line =
+      files > 0 ? `${pre}📁 ${name} (${files}个文件)` : `${pre}📁 ${name}`
+    lines.push(line)
+    totalFolders++
+    totalFiles += files
+    scannedFolders++
+    showProgress()
+
+    for (const d of dirs) {
+      walk(path.join(dir, d), pre + '  ')
+    }
+  }
+
+  lines.push(`📂 ${targetPath}`)
+  lines.push(`📅 ${new Date().toLocaleString()}`)
+  lines.push('─'.repeat(50))
+  walk(targetPath)
+
+  console.log('\n')
+
+  lines.push('─'.repeat(50))
+  lines.push(`📊 ${totalFolders} 个文件夹，${totalFiles} 个文件`)
+  if (skippedFolders > 0) {
+    lines.push(`⚠️ 跳过 ${skippedFolders} 个无权限的文件夹`)
+  }
+
+  fs.writeFileSync(outputPath, lines.join('\n'))
+  console.log(`\n✅ 目录清单已生成: ${outputPath}`)
+  console.log(`📊 ${totalFolders} 个文件夹，${totalFiles} 个文件`)
+  if (skippedFolders > 0) {
+    console.log(`⚠️ 跳过 ${skippedFolders} 个无权限的文件夹`)
+  }
+}
+
+// ============ 公共函数 ============
 function getVolumes() {
   try {
     const output = execSync('ls /Volumes', { encoding: 'utf-8' })
@@ -65,7 +167,6 @@ async function chooseSaveLocation() {
   return null
 }
 
-// 递归选择文件夹
 async function chooseFolderDeep(rootPath) {
   let currentPath = rootPath
   let folderName = '全盘'
@@ -113,7 +214,8 @@ async function chooseFolderDeep(rootPath) {
   return null
 }
 
-async function main() {
+// ============ 交互模式 ============
+async function runInteractiveMode() {
   const volumes = getVolumes()
   if (volumes.length === 0) {
     console.log('❌ 没有找到已挂载的硬盘')
@@ -224,4 +326,16 @@ async function main() {
   }
 }
 
-main().catch(console.error)
+// ============ 入口 ============
+const args = process.argv.slice(2)
+const isAuto = args.includes('--auto') || args.includes('-a')
+
+if (isAuto) {
+  const targetIndex = args.findIndex(
+    (arg) => arg === '--target' || arg === '-t',
+  )
+  const targetPath = targetIndex !== -1 ? args[targetIndex + 1] : null
+  runAutoMode(targetPath)
+} else {
+  runInteractiveMode().catch(console.error)
+}
